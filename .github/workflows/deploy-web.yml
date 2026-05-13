@@ -1,0 +1,90 @@
+name: Build and Deploy Web
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+env:
+  RESOURCE_GROUP: rg-gin-grocery-dev-t5n05b
+  CONTAINER_APP_ENV: cae-gin-grocery-dev-t5n05b
+  ACR_NAME: acrgingrocerydevt5n05b
+  ACR_LOGIN_SERVER: acrgingrocerydevt5n05b.azurecr.io
+  WEB_APP_NAME: ca-web-gin-grocery-dev-t5n05b
+  IMAGE_NAME: gin-grocery-web
+  API_BASE_URL: https://ca-api-gin-grocery-dev-t5n05b.kindbeach-885bc456.northeurope.azurecontainerapps.io
+
+jobs:
+  build-and-deploy-web:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout frontend code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Login to ACR
+        run: az acr login --name $ACR_NAME
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            --build-arg VITE_API_BASE_URL=$API_BASE_URL \
+            -t $ACR_LOGIN_SERVER/$IMAGE_NAME:${{ github.sha }} \
+            .
+
+      - name: Push Docker image
+        run: |
+          docker push $ACR_LOGIN_SERVER/$IMAGE_NAME:${{ github.sha }}
+
+      - name: Get pull identity
+        id: identity
+        run: |
+          IDENTITY_ID=$(az identity show \
+            --name id-api-gin-grocery-dev-t5n05b \
+            --resource-group $RESOURCE_GROUP \
+            --query id \
+            -o tsv)
+
+          echo "identity_id=$IDENTITY_ID" >> $GITHUB_OUTPUT
+
+      - name: Create or update Container App
+        run: |
+          EXISTS=$(az containerapp show \
+            --name $WEB_APP_NAME \
+            --resource-group $RESOURCE_GROUP \
+            --query name \
+            -o tsv 2>/dev/null || true)
+
+          if [ -z "$EXISTS" ]; then
+            az containerapp create \
+              --name $WEB_APP_NAME \
+              --resource-group $RESOURCE_GROUP \
+              --environment $CONTAINER_APP_ENV \
+              --image $ACR_LOGIN_SERVER/$IMAGE_NAME:${{ github.sha }} \
+              --target-port 80 \
+              --ingress external \
+              --min-replicas 0 \
+              --max-replicas 2 \
+              --registry-server $ACR_LOGIN_SERVER \
+              --user-assigned "${{ steps.identity.outputs.identity_id }}" \
+              --registry-identity "${{ steps.identity.outputs.identity_id }}"
+          else
+            az containerapp update \
+              --name $WEB_APP_NAME \
+              --resource-group $RESOURCE_GROUP \
+              --image $ACR_LOGIN_SERVER/$IMAGE_NAME:${{ github.sha }}
+          fi
+
+      - name: Show frontend URL
+        run: |
+          az containerapp show \
+            --name $WEB_APP_NAME \
+            --resource-group $RESOURCE_GROUP \
+            --query properties.configuration.ingress.fqdn \
+            -o tsv
