@@ -1,4 +1,5 @@
 export const env = {
-  // Empty by default so Vite dev proxy and same-origin container proxy can handle /v1 and /health.
+  // In development this can stay empty so Vite proxies /v1 and /health.
+  // In production the Docker build receives VITE_API_BASE_URL and bakes it into the static bundle.
   apiBaseUrl: import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "",
 };
